@@ -20,4 +20,6 @@ const blockLogSchema = new mongoose.Schema({
   unblockedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }
 });
 
+blockLogSchema.index({userId:1, blockedAt:-1});
+
 module.exports = mongoose.model('BlockLog', blockLogSchema);

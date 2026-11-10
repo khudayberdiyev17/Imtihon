@@ -20,29 +20,7 @@ const subjectFetchLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => req.userId || req.ip,
-  handler: async (req, res) => {
-    // Auto-block user for excessive requests
-    if (req.userId) {
-      const User = require('../models/User');
-      const BlockLog = require('../models/BlockLog');
-      
-      await User.findByIdAndUpdate(req.userId, {
-        status: 'blocked',
-        blockReason: 'rate_limit_exceeded',
-        blockedAt: new Date()
-      });
-      
-      await BlockLog.create({
-        userId: req.userId,
-        reason: 'rate_limit_exceeded',
-        description: 'Excessive subject fetch requests (>5 in 10 seconds)'
-      });
-    }
-    res.status(429).json({ 
-      error: 'Too many subject fetch requests. You have been blocked.',
-      code: 'RATE_LIMIT_SUBJECT'
-    });
-  }
+
 });
 
 // Rate limiter for admin endpoints (10 requests per second per user)
@@ -68,7 +46,7 @@ const loginRateLimiter = rateLimit({
 // General API rate limiter
 const apiRateLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: 100,
+  max: 3000, // Shared school NAT; authentication still protects individual endpoints.
   message: { error: 'Too many requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,

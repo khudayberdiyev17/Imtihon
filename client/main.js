@@ -4,6 +4,7 @@ const fs   = require('fs');
 
 let mainWindow = null;
 let allowQuit  = false;
+let testActive = false;
 
 // ── Production flag ───────────────────────────────────────────────────────────
 const IS_PROD = app.isPackaged;
@@ -14,8 +15,8 @@ const IS_PROD = app.isPackaged;
 function readConfig() {
   const locations = IS_PROD
     ? [
-        path.join(process.resourcesPath, 'config.json'),  // extraResource
-        path.join(path.dirname(process.execPath), 'config.json') // .exe yonida
+        path.join(path.dirname(process.execPath), 'config.json'),
+        path.join(process.resourcesPath, 'config.json')
       ]
     : [path.join(__dirname, 'config.json')];
 
@@ -109,6 +110,7 @@ function createWindow() {
 app.whenReady().then(() => {
   // Emergency exit — MUST register before window creation
   const registered = globalShortcut.register('Control+Shift+O', () => {
+    if (testActive) return;
     allowQuit = true;
     if (mainWindow) mainWindow.destroy();
     app.quit();
@@ -126,7 +128,9 @@ app.on('window-all-closed', () => app.quit());
 // ── IPC handlers ─────────────────────────────────────────────────────────────
 ipcMain.handle('get-config', () => readConfig());
 
+ipcMain.on('test-active', (_event, active) => { testActive = active === true; });
 ipcMain.on('force-quit', () => {
+  if (testActive) return;
   allowQuit = true;
   app.quit();
 });

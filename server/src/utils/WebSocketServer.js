@@ -1,4 +1,6 @@
 const WebSocket = require('ws');
+const jwt = require('jsonwebtoken');
+const {JWT_SECRET} = require('../middleware/auth');
 const User = require('../models/User');
 const BlockLog = require('../models/BlockLog');
 const TestSession = require('../models/TestSession');
@@ -9,7 +11,7 @@ const HEARTBEAT_TIMEOUT = 30000; // 30 seconds - if no heartbeat, block user
 
 class WebSocketServer {
   constructor(server) {
-    this.wss = new WebSocket.Server({ server });
+    this.wss = new WebSocket.Server({ server, maxPayload: 4096, perMessageDeflate: false });
     this.clients = new Map();      // Map<userId, WebSocket>  — students
     this.adminClients = new Set(); // Set<WebSocket>          — admins
     
@@ -28,6 +30,8 @@ class WebSocketServer {
 
     ws.isAlive = true;
     ws.userId = null;
+    const authTimer = setTimeout(()=>{if (!ws.userId && !ws.isAdmin) ws.close(1008,'Authentication required');},10000);
+    ws.once('close',()=>clearTimeout(authTimer));
 
     ws.on('pong', () => {
       ws.isAlive = true;
@@ -66,7 +70,7 @@ class WebSocketServer {
       if (ws.isAdmin) {
         this.adminClients.delete(ws);
       } else if (ws.userId) {
-        this.clients.delete(ws.userId);
+        if (this.clients.get(ws.userId) === ws) this.clients.delete(ws.userId);
       }
     });
 
@@ -76,7 +80,14 @@ class WebSocketServer {
   }
 
   async handleAuth(ws, message) {
-    const { userId, token, role } = message;
+    if (ws.userId || ws.isAdmin || ws.authenticating) return;
+    ws.authenticating = true;
+    let decoded;
+    try { decoded = jwt.verify(message.token, JWT_SECRET); } catch (_) { return ws.close(1008, 'Invalid token'); }
+    const user = await User.findById(decoded.userId).select('role status').lean();
+    if (!user || user.status === 'blocked' || user.role !== decoded.role) return ws.close(1008, 'Access denied');
+    const userId = String(user._id), role = user.role;
+    ws.expiresAt = decoded.exp * 1000;
 
     if (role === 'admin') {
       ws.isAdmin = true;
@@ -86,6 +97,8 @@ class WebSocketServer {
       return;
     }
 
+    const previous = this.clients.get(userId);
+    if (previous) previous.close(1000, 'Replaced');
     ws.userId = userId;
     this.clients.set(userId, ws);
     ws.send(JSON.stringify({ type: 'auth_success', message: 'WebSocket authenticated' }));
@@ -123,32 +136,12 @@ class WebSocketServer {
     // Faqat aktiv test sessiyasi bo'lganda hisoblash
     if (!activeSessions.has(ws.userId.toString())) return;
 
-    const user = await User.findById(ws.userId);
-    if (!user || user.status === 'blocked') return;
-
-    // Increment key press count
-    user.keyPressCount = (user.keyPressCount || 0) + 1;
-    
-    // Check if exceeded limit (3 presses)
-    if (user.keyPressCount > 3) {
-      await this.blockUserForExcessiveKeys(ws.userId);
-      
-      ws.send(JSON.stringify({
-        type: 'blocked',
-        reason: 'excessive_keys',
-        message: 'Siz klaviaturadan ko\'p foydalandingiz va bloklandingiz. Adminga murojaat qiling'
-      }));
-      
-      return;
-    }
-    
-    await user.save();
-    
-    ws.send(JSON.stringify({
-      type: 'keypress_ack',
-      count: user.keyPressCount,
-      remaining: 3 - user.keyPressCount
-    }));
+    const session = activeSessions.get(ws.userId.toString());
+    const now = Date.now();
+    if (now - (session.lastKeyEvent || 0) < 1000) return;
+    session.lastKeyEvent = now;
+    session.keyPressCount = (session.keyPressCount || 0) + 1;
+    this.broadcastAdmins({type:'proctor_warning', userId:ws.userId, reason:'keyboard_shortcut', count:session.keyPressCount, at:new Date().toISOString()});
   }
 
   async blockUserForExcessiveKeys(userId) {
@@ -189,10 +182,11 @@ class WebSocketServer {
   checkHeartbeats() {
     // Check all WebSocket connections
     this.wss.clients.forEach(async (ws) => {
+      if (ws.expiresAt && Date.now() >= ws.expiresAt) return ws.close(1008, 'Token expired');
       if (!ws.isAlive) {
         // Connection is dead
         if (ws.userId) {
-          await this.handleDisconnect(ws.userId, 'websocket_lost');
+          // Disconnection is a technical event; it does not prove cheating.
         }
         return ws.terminate();
       }
@@ -201,14 +195,7 @@ class WebSocketServer {
       ws.ping();
     });
 
-    // Also check HTTP-based sessions (for clients not using WebSocket)
-    activeSessions.forEach(async (session, userId) => {
-      const timeSinceHeartbeat = Date.now() - session.lastHeartbeat;
-      
-      if (timeSinceHeartbeat > HEARTBEAT_TIMEOUT) {
-        await this.handleDisconnect(userId, 'heartbeat_timeout');
-      }
-    });
+    // Deadline processing is independent of connectivity.
   }
 
   async handleDisconnect(userId, reason) {

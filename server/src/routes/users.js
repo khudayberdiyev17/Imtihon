@@ -4,8 +4,26 @@ const User = require('../models/User');
 const BlockLog = require('../models/BlockLog');
 const TestSession = require('../models/TestSession');
 const bcrypt = require('bcryptjs');
-const { v4: uuidv4 } = require('uuid');
 const { authenticateAdmin, generateToken } = require('../middleware/auth');
+
+// Compact export data: no passwords, images, drafts or answer keys.
+router.get('/export', authenticateAdmin, async (req, res) => {
+  try {
+    const Subject = require('../models/Subject');
+    const classes = await User.distinct('className', {role:'student'});
+    const subjects = await Subject.aggregate([{$project:{name:1, questionCount:{$size:{$ifNull:['$questions',[]]}}}},{$sort:{name:1}}]);
+    if (req.query.metadata === '1') return res.json({classes:classes.sort(), subjects});
+    const filter = {role:'student'};
+    if (typeof req.query.className === 'string') filter.className = req.query.className;
+    const students = await User.find(filter).select('firstName lastName username className').sort({lastName:1,firstName:1,_id:1}).lean();
+    const ids = typeof req.query.subjectIds === 'string' ? req.query.subjectIds.split(',') : subjects.map(s=>String(s._id));
+    const selected = subjects.filter(s=>ids.includes(String(s._id)));
+    if (!selected.length) return res.status(400).json({error:'Kamida bitta fan tanlang'});
+    const results = await TestSession.find({status:'completed',userId:{$in:students.map(s=>s._id)},subjectId:{$in:selected.map(s=>s._id)}})
+      .select('userId subjectId totalQuestions correctAnswers score completedAt').sort({completedAt:-1,_id:-1}).lean();
+    res.json({students,subjects:selected,results});
+  } catch(e) { console.error('Export error:',e);res.status(500).json({error:'Export ma’lumotlarini yuklab bo‘lmadi'}); }
+});
 
 // Get all users (admin only)
 router.get('/', authenticateAdmin, async (req, res) => {
@@ -113,21 +131,8 @@ router.put('/:id', authenticateAdmin, async (req, res) => {
 });
 
 // Delete a test result (admin only) — MUST be before /:id to avoid route conflict
-router.delete('/results/:sessionId', authenticateAdmin, async (req, res) => {
-  try {
-    const { sessionId } = req.params;
-    if (!sessionId || sessionId.length !== 24) {
-      return res.status(400).json({ error: 'Invalid session ID' });
-    }
-    const session = await TestSession.findByIdAndDelete(sessionId);
-    if (!session) {
-      return res.status(404).json({ error: 'Test session not found' });
-    }
-    res.json({ message: 'Result deleted successfully' });
-  } catch (error) {
-    console.error('Delete result error:', error);
-    res.status(500).json({ error: 'Failed to delete result' });
-  }
+router.delete('/results/:sessionId', authenticateAdmin, (_req,res) => {
+  res.status(403).json({error:'Exam results are retained for audit'});
 });
 
 // Delete a user (admin only) — cascade deletes all related data
@@ -135,6 +140,7 @@ router.delete('/:id', authenticateAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
+    if (await TestSession.exists({userId:id})) return res.status(409).json({error:'User has exam history; block the account instead'});
     const user = await User.findByIdAndDelete(id);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
@@ -279,6 +285,12 @@ router.put('/:id/block', authenticateAdmin, async (req, res) => {
       unblockedBy: req.userId
     });
 
+    await TestSession.updateMany({userId:id, status:'active'}, {$set:{status:'interrupted'}});
+    const {activeSessions} = require('./test');
+    const active = activeSessions.get(id);
+    if (active?.timeoutHandle) clearTimeout(active.timeoutHandle);
+    activeSessions.delete(id);
+
     // Real-time WS notification to student if connected
     const wsServer = req.app.locals.wsServer;
     if (wsServer) {
@@ -301,7 +313,7 @@ router.get('/results', authenticateAdmin, async (req, res) => {
   try {
     const { className, status } = req.query;
 
-    let sessions = await TestSession.find({ status: 'completed' })
+    let sessions = await TestSession.find({ status: 'completed' }).select('-draftAnswers -detailedResults -questionOrder -optionMappings -answers')
       .populate('userId',    'username firstName lastName className')
       .populate('subjectId', 'name passingThreshold')
       .sort({ completedAt: -1 });
@@ -311,7 +323,7 @@ router.get('/results', authenticateAdmin, async (req, res) => {
 
     let rows = sessions.map(s => {
       const thr    = s.subjectId?.passingThreshold;
-      const passed = thr?.thresholdType === 'count'
+      const passed = s.passed !== undefined ? s.passed : thr?.thresholdType === 'count'
         ? (s.correctAnswers || 0) >= (thr?.thresholdValue ?? 60)
         : (s.score         || 0) >= (thr?.thresholdValue ?? 60);
       return {
@@ -346,7 +358,7 @@ router.get('/:id/history', authenticateAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     
-    const sessions = await TestSession.find({ userId: id })
+    const sessions = await TestSession.find({ userId: id }).select('-draftAnswers -detailedResults -questionOrder -optionMappings -answers')
       .populate('subjectId', 'name')
       .sort({ completedAt: -1 });
 
@@ -372,8 +384,9 @@ router.get('/reports/:sessionId', authenticateAdmin, async (req, res) => {
 
     // Build detailed results
     const subject = session.subjectId;
-    const detailedResults = session.answers.map(answer => {
-      const question = subject.questions[answer.questionIndex];
+    const detailedResults = session.detailedResults?.length ? session.detailedResults : session.answers.map(answer => {
+      const question = subject?.questions[answer.questionIndex];
+      if (!question) return {questionIndex: answer.questionIndex, unavailable: true};
       const isCorrect = answer.selectedOption === question.correctIndex;
       return {
         questionIndex: answer.questionIndex,
@@ -390,7 +403,7 @@ router.get('/reports/:sessionId', authenticateAdmin, async (req, res) => {
       session: {
         id: session._id,
         student: session.userId,
-        subject: subject.name,
+        subject: subject?.name || 'Arxiv',
         score: session.score,
         totalQuestions: session.totalQuestions,
         correctAnswers: session.correctAnswers,

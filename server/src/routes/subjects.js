@@ -13,7 +13,7 @@ router.get('/', authenticateStudent, subjectFetchLimiter, async (req, res) => {
     const subjects = await Subject.find({
       isActive: true,
       name: { $in: user.subjects || [] }
-    });
+    }).select('name description totalTimeLimit passingThreshold questions._id').lean();
 
     // Check which subjects the user has already completed
     const completedSessions = await TestSession.find({

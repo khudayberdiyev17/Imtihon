@@ -18,7 +18,7 @@ router.post('/login', loginRateLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Invalid input format' });
     }
 
-    const user = await User.findOne({ username: username.trim() });
+    const user = await User.findOne({ username: username.trim(), role: 'student' });
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }

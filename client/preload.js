@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   /** Server URL va WebSocket URL ni qaytaradi */
+  setTestActive: active => ipcRenderer.send('test-active', active),
   getConfig: () => ipcRenderer.invoke('get-config'),
 
   /** Favqulodda chiqish (faqat admin uchun) */

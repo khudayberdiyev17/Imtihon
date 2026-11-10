@@ -443,10 +443,11 @@ async function startTest(subjectId, subjectName, timeLimitMin) {
     S.test.subjectId        = subjectId;
     S.test.subjectName      = subjectName;
     S.test.questions        = data.questions || [];
-    S.test.answers          = {};
+    S.test.answers          = Object.fromEntries((data.answers || []).map(a => [a.questionIndex, a.selectedOption]));
     S.test.currentIndex     = 0;
     S.test.totalSeconds     = (data.totalTimeLimit || timeLimitMin) * 60;
-    S.test.remainSeconds    = S.test.totalSeconds;
+    S.test.remainSeconds    = Math.max(0, Math.floor((data.remainingTime ?? (data.totalTimeLimit * 60000 - (Date.now()-data.startTime))) / 1000));
+    S.test.deadline = Date.now() + S.test.remainSeconds * 1000;
     S.test.passingThreshold = data.passingThreshold || { thresholdType: 'percent', thresholdValue: 60 };
 
     if (!S.test.questions.length) {
@@ -455,6 +456,7 @@ async function startTest(subjectId, subjectName, timeLimitMin) {
       return;
     }
 
+    window.electronAPI?.setTestActive(true);
     buildDots();
     renderQuestion(0);
     startTimer();
@@ -507,8 +509,9 @@ function renderQuestion(index) {
 
     btn.innerHTML = `
       <span class="opt-letter">${letters[i]}</span>
-      <span class="opt-text">${text}</span>`;
+      <span class="opt-text"></span>`;
 
+    btn.querySelector('.opt-text').textContent = text;
     btn.addEventListener('click', () => selectAnswer(index, i));
     opts.appendChild(btn);
   });
@@ -523,6 +526,8 @@ function renderQuestion(index) {
 
 function selectAnswer(qIndex, optIndex) {
   S.test.answers[qIndex] = optIndex;
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(saveDraft, 300);
 
   // Reflect visually
   document.querySelectorAll('.option-btn').forEach((btn, i) => {
@@ -580,7 +585,7 @@ function startTimer() {
   timerEl.className = 'timer-value';
 
   S.test.timerHandle = setInterval(() => {
-    S.test.remainSeconds--;
+    S.test.remainSeconds = Math.max(0, Math.ceil((S.test.deadline-Date.now())/1000));
 
     timerEl.textContent = fmtTime(Math.max(0, S.test.remainSeconds));
 
@@ -598,19 +603,28 @@ function startTimer() {
 }
 
 /* ── Heartbeat ────────────────────────────────────────────────────────────── */
+let draftBusy = false;
+let draftTimer;
+let savedDraft = '';
+async function saveDraft() {
+  const answers = Object.entries(S.test.answers).map(([q, selectedOption]) => ({questionIndex:Number(q), selectedOption}));
+  const serialized = JSON.stringify(answers);
+  if (draftBusy || serialized === savedDraft) return;
+  draftBusy = true;
+  try { await POST('/test/answers', {sessionId:S.test.sessionId, answers}, S.token); savedDraft = serialized; }
+  catch (_) { /* Keep answers and retry next tick. */ }
+  finally { draftBusy = false; }
+}
 function startHeartbeat() {
   clearInterval(S.test.heartbeatHandle);
+  savedDraft = '';
   S.test.heartbeatHandle = setInterval(() => {
-    fetch(S.cfg.serverUrl + '/test/heartbeat', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${S.token}` },
-    }).catch(() => {});
-  }, 10_000);
+    wsSend({type:'heartbeat'});
+    saveDraft();
+  }, 5000);
 }
-
-/* ── Keypress tracking ────────────────────────────────────────────────────── */
-function onTestKeyDown() {
-  wsSend({ type: 'keypress' });
+function onTestKeyDown(e) {
+  if (!e.repeat && (e.altKey || e.metaKey || (e.ctrlKey && !['a','c','v','x','z'].includes(e.key.toLowerCase())))) wsSend({type:'keypress'});
 }
 
 /* ── Cleanup ──────────────────────────────────────────────────────────────── */
@@ -636,6 +650,8 @@ function trySubmitTest() {
 }
 
 async function submitTest(reason = 'manual') {
+  if (S.test.submitting) return;
+  S.test.submitting = true;
   clearTest();
 
   const answers = Object.entries(S.test.answers).map(([qIdx, optIdx]) => ({
@@ -649,9 +665,10 @@ async function submitTest(reason = 'manual') {
     showResults(data);
   } catch(e) {
     toast(e.message || 'Topshirishda xato.', 'error');
-    // Still show results with whatever we know
-    showResults({ score: 0, correctAnswers: 0, wrongAnswers: S.test.questions.length,
-                  timeUsed: S.test.totalSeconds - S.test.remainSeconds });
+    toast('Natija tasdiqlanmadi. Javoblar saqlanib turibdi; qayta topshiring.', 'error');
+    startHeartbeat();
+  } finally {
+    S.test.submitting = false;
   }
 }
 
@@ -679,6 +696,7 @@ function initTestNav() {
    RESULTS SCREEN
 ══════════════════════════════════════════════════════════════════════════ */
 function showResults(data) {
+  window.electronAPI?.setTestActive(false);
   showScreen('results');
 
   const score   = data.score         || 0;

@@ -1,7 +1,7 @@
 {
   "name": "exam-client",
-  "version": "1.0.0",
-  "description": "Imtihon tizimi — talabalar uchun klient dastur",
+  "version": "1.0.2",
+  "description": "Imtihon tizimi - talabalar uchun Windows klient",
   "author": "Exam System",
   "main": "main.js",
   "scripts": {
@@ -16,12 +16,19 @@
   },
   "build": {
     "appId": "uz.exam.client",
-    "productName": "Imtihon Tizimi",
-    "copyright": "© 2025 Exam System",
+    "productName": "Imtihon tizimi",
+    "copyright": "Copyright 2026 Cybertron",
     "asar": true,
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
-      "requestedExecutionLevel": "requireAdministrator"
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "requestedExecutionLevel": "asInvoker"
     },
     "nsis": {
       "oneClick": false,
@@ -30,7 +37,9 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Imtihon Tizimi",
-      "installerLanguages": ["ru"],
+      "installerLanguages": [
+        "ru"
+      ],
       "language": "1049",
       "deleteAppDataOnUninstall": true
     },
@@ -49,6 +58,7 @@
     ],
     "directories": {
       "output": "dist"
-    }
+    },
+    "artifactName": "Imtihon-tizimi-Setup-${version}.${ext}"
   }
 }

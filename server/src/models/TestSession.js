@@ -1,6 +1,13 @@
 const mongoose = require('mongoose');
 
 const testSessionSchema = new mongoose.Schema({
+  snapshot: {type: mongoose.Schema.Types.Mixed, select: false},
+  questionOrder: [Number],
+  optionMappings: [[Number]],
+  deadline: Date,
+  draftAnswers: [mongoose.Schema.Types.Mixed],
+  detailedResults: [mongoose.Schema.Types.Mixed],
+  passed: Boolean,
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   subjectId: { type: mongoose.Schema.Types.ObjectId, ref: 'Subject', required: true },
   status: { 
@@ -21,6 +28,9 @@ const testSessionSchema = new mongoose.Schema({
   timeUsed: { type: Number, default: 0 }, // Time used in seconds
   completedAt: { type: Date, default: null }
 });
+
+testSessionSchema.index({userId: 1, status: 1});
+testSessionSchema.index({status: 1, completedAt: -1});
 
 testSessionSchema.pre('save', function(next) {
   if (this.status === 'completed') {

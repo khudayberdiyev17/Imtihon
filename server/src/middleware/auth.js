@@ -1,7 +1,8 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'default-secret-change-me';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || JWT_SECRET.length < 32 || JWT_SECRET.includes('change-in-production')) throw new Error('Set a random JWT_SECRET of at least 32 characters');
 
 // Middleware to authenticate student tokens
 const authenticateStudent = async (req, res, next) => {
@@ -31,6 +32,7 @@ const authenticateStudent = async (req, res, next) => {
       });
     }
 
+    if (user.role !== decoded.role || user.status === 'blocked') return res.status(403).json({error: 'Access denied'});
     req.user = user;
     req.userId = user._id;
     next();
@@ -63,6 +65,7 @@ const authenticateAdmin = async (req, res, next) => {
       return res.status(404).json({ error: 'Admin not found' });
     }
 
+    if (user.role !== decoded.role || user.status === 'blocked') return res.status(403).json({error: 'Access denied'});
     req.user = user;
     req.userId = user._id;
     next();

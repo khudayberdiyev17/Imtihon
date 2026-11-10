@@ -28,7 +28,7 @@ app.use(cors({
   // Faqat localhost va loopback dan kirish (LAN exam tizimi uchun)
   origin: (origin, callback) => {
     // Electron client, admin panel va lokal so'rovlarga ruxsat
-    if (!origin) return callback(null, true); // curl / Electron / server-side
+    if (!origin || origin === 'null' || (process.env.ALLOWED_ORIGINS || '').split(',').includes(origin)) return callback(null, true); // curl / Electron / server-side
     const allowed = /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+)(:\d+)?$/.test(origin);
     callback(null, allowed);
   },
@@ -36,8 +36,8 @@ app.use(cors({
 }));
 
 // Body parsing middleware — 50 MB limit (base64 rasmlar uchun)
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: '16mb' }));
+app.use(express.urlencoded({ extended: true, limit: '16mb' }));
 
 // Rate limiting
 app.use('/api', apiRateLimiter);
@@ -170,7 +170,8 @@ app.locals.wsServer = wsServer; // test.js dan broadcast qilish uchun
 // Connect to MongoDB and start server
 async function startServer() {
   try {
-    await mongoose.connect(MONGODB_URI);
+    await mongoose.connect(MONGODB_URI, {maxPoolSize: 10, minPoolSize: 0});
+    await testRoutes.restoreSessions();
     console.log('Connected to MongoDB');
 
     server.listen(PORT, '0.0.0.0', () => {

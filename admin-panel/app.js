@@ -1,8 +1,6 @@
 // ── Config ───────────────────────────────────────────────
 const _host = window.location.hostname || 'localhost';
-const API_BASE_URL = (_host === 'localhost' || _host === '127.0.0.1' || _host === '')
-    ? 'http://localhost:3000/api'
-    : `http://${_host}:3000/api`;
+const API_BASE_URL = window.location.protocol === 'file:' ? 'http://localhost:3000/api' : `${window.location.origin}/api`;
 
 let authToken = localStorage.getItem('adminToken');
 let currentUser = null;
@@ -141,7 +139,7 @@ function connectAdminWS() {
     const wsHost = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || !window.location.hostname)
         ? 'localhost'
         : window.location.hostname;
-    const wsUrl  = `ws://${wsHost}:3000`;
+    const wsUrl = window.location.protocol === 'file:' ? 'ws://localhost:3000' : `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
 
     try {
         adminWs = new WebSocket(wsUrl);
@@ -292,7 +290,7 @@ async function apiFetch(path, options = {}) {
 
 // ── Navigation ───────────────────────────────────────────
 function showSection(section) {
-    ['dashboard', 'subjects', 'users', 'blocked', 'results', 'reports'].forEach(s => {
+    ['dashboard', 'subjects', 'users', 'blocked', 'results', 'reports', 'export'].forEach(s => {
         document.getElementById(`section-${s}`)?.classList.add('hidden');
         document.getElementById(`nav-${s}`)?.classList.remove('active');
     });
@@ -305,7 +303,8 @@ function showSection(section) {
         users:     'Foydalanuvchilar',
         blocked:   'Bloklangan foydalanuvchilar',
         results:   'Imtihon natijalari',
-        reports:   'Hisobotlar'
+        reports:   'Hisobotlar',
+        export: 'Export'
     };
     document.getElementById('pageTitle').textContent = titles[section] || section;
 
@@ -318,6 +317,7 @@ function showSection(section) {
         case 'blocked':   loadBlockedUsers(); break;
         case 'results':   loadExamResults(); break;
         case 'reports':   loadReports(); break;
+        case 'export': loadExport(); break;
     }
 }
 
@@ -1729,6 +1729,8 @@ function toggleStudentRows(uid) {
 }
 
 async function deleteResult(sessionId, studentName) {
+    showToast('Natijalar audit uchun saqlanadi; o‘chirish yopilgan.', 'info');
+    return;
     showConfirm(
         `${studentName} natijasini o'chirishni xohlaysizmi? O'chirilgandan so'ng talaba bu fandan qayta imtihon topshira oladi.`,
         async () => {
